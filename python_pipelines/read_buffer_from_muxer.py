@@ -1,22 +1,12 @@
-#!/usr/bin/env python3
 import os
 
 os.environ["GST_DEBUG"] = "2"
 import logging
-
-logging.basicConfig(
-    level=logging.DEBUG, format="[%(name)s] [%(levelname)s] - %(message)s"
-)
-logger = logging.getLogger(__name__)
 import subprocess
-
-from dotenv import load_dotenv
-
-load_dotenv()  # Load variables from a .env file in the current directory
-
 import sys
 
 import gi
+from dotenv import load_dotenv
 
 gi.require_version("Gst", "1.0")
 gi.require_version("GLib", "2.0")
@@ -24,6 +14,12 @@ import cv2
 import numpy as np
 from gi.repository import GLib, Gst
 from helper.profiler import FPSCounter
+
+load_dotenv()
+logging.basicConfig(
+    level=logging.DEBUG, format="[%(name)s] [%(levelname)s] - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 
 class MultiSourcePipeline:
