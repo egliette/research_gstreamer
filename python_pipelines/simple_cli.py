@@ -1,3 +1,6 @@
+import os
+
+os.environ["GST_DEBUG"] = "2"
 import logging
 import subprocess
 import sys
