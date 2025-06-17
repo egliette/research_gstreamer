@@ -1,6 +1,6 @@
 import os
 
-os.environ["GST_DEBUG"] = "0"
+os.environ["GST_DEBUG"] = "2"
 import logging
 
 logging.basicConfig(
@@ -34,24 +34,21 @@ class SmartRecorder:
         self.buffer_queue = deque(maxlen=1000)
         
         # Initialize recording pipeline
-        self.pipeline = Gst.parse_launch(
+        self.record_pipeline = Gst.parse_launch(
             f'rtspsrc location={self.rtsp_url} latency=200 ! '
-            'rtpmp4vdepay ! '
+            'parsebin ! '
             'appsink name=sink emit-signals=true sync=false'
         )
-        
-        # Save recording pipeline diagram
-        self.save_pipeline_graph("recording_pipeline.png")
-        
+                
         # Connect to appsink
-        self.appsink = self.pipeline.get_by_name('sink')
+        self.appsink = self.record_pipeline.get_by_name('sink')
         self.appsink.connect("new-sample", self.on_new_sample, None)
         
-    def save_pipeline_graph(self, png_file="pipeline.png"):
+    def save_pipeline_graph(self, pipeline, png_file="pipeline.png"):
         """Save pipeline diagram to PNG file"""
         dot_file = png_file.replace(".png", ".dot")
         with open(dot_file, "w") as f:
-            f.write(Gst.debug_bin_to_dot_data(self.pipeline, Gst.DebugGraphDetails.ALL))
+            f.write(Gst.debug_bin_to_dot_data(pipeline, Gst.DebugGraphDetails.ALL))
         subprocess.run(["dot", "-Tpng", dot_file, "-o", png_file])
         logger.info(f"Saved pipeline graph as {png_file}")
     
@@ -59,15 +56,7 @@ class SmartRecorder:
         """Callback to handle each new sample"""
         sample = sink.emit("pull-sample")
         buf = sample.get_buffer()
-        result, mapinfo = buf.map(Gst.MapFlags.READ)
-        if result:
-            data = mapinfo.data
-            pts = buf.pts
-            self.buffer_queue.append((data, pts))
-            # Drop frames older than buffer duration
-            while self.buffer_queue and (pts - self.buffer_queue[0][1] > self.buffer_duration):
-                self.buffer_queue.popleft()
-            buf.unmap(mapinfo)
+        self.buffer_queue.append(buf)
         return Gst.FlowReturn.OK
     
     def analyze_video_file(self, video_path):
@@ -96,40 +85,50 @@ class SmartRecorder:
     def save_buffered_video(self, output_file):
         """Save buffered frames to MP4 file"""
         logger.info("Start saving the buffered video")
-        # Create and start pipeline
-        save_pipe = Gst.parse_launch(
-            'appsrc name=src format=time ! '
-            'mpeg4videoparse ! '
-            'mp4mux ! '
+        sink_pad = self.appsink.get_static_pad("sink")
+        caps = sink_pad.get_current_caps()
+        save_pipeline = Gst.parse_launch(
+            f'appsrc name=src format=time caps="{caps.to_string()}" ! '
+            'parsebin !'
+            'mp4mux  ! '
             f'filesink location={output_file} sync=false'
         )
-        
-        # Save saving pipeline diagram
-        self.pipeline = save_pipe
-        self.save_pipeline_graph("saving_pipeline.png")
-        
-        save_pipe.set_state(Gst.State.PLAYING)
-        
+        save_pipeline.set_state(Gst.State.PLAYING)
+
         # Get appsrc element
-        appsrc = save_pipe.get_by_name('src')
-        
+        appsrc = save_pipeline.get_by_name('src')
+
         # Push frames to appsrc
-        for data, pts in list(self.buffer_queue):
-            buf = Gst.Buffer.new_allocate(None, len(data), None)
-            buf.fill(0, data)
-            buf.pts = pts
+        logger.info("Start adding buffer to video")
+        first_pts = self.buffer_queue[0].pts
+        fps = 0
+        if len(self.buffer_queue) >= 2:
+            total_frames = len(self.buffer_queue)
+            last_pts = self.buffer_queue[-1].pts
+
+            duration_sec = (last_pts - first_pts) / Gst.SECOND
+            fps = int(total_frames / duration_sec) if duration_sec > 0 else 0
+        
+        for i, buf in enumerate(self.buffer_queue):
+            if fps:
+                buf.pts = int(i * Gst.SECOND / fps)
+            else:
+                buf.pts = buf.pts - first_pts
             appsrc.emit("push-buffer", buf)
         
+        # Save saving pipeline diagram
+        self.save_pipeline_graph(save_pipeline, "saving_pipeline.png")
+
         # Signal EOS and wait for the muxer to finish
         appsrc.emit("end-of-stream")
-        bus = save_pipe.get_bus()
+        bus = save_pipeline.get_bus()
         bus.timed_pop_filtered(
             Gst.CLOCK_TIME_NONE,
             Gst.MessageType.EOS | Gst.MessageType.ERROR
         )
         
         # Cleanup
-        save_pipe.set_state(Gst.State.NULL)
+        save_pipeline.set_state(Gst.State.NULL)
         logger.info(f"Saved {len(self.buffer_queue)} buffers to {output_file}")
         
         # Analyze the saved video
@@ -142,10 +141,13 @@ class SmartRecorder:
     
     def play(self):
         """Start the recording pipeline"""
-        self.pipeline.set_state(Gst.State.PLAYING)
+        self.record_pipeline.set_state(Gst.State.PLAYING)
 
         time.sleep(30)
-
+        
+        # Save recording pipeline diagram
+        self.record_pipeline.set_state(Gst.State.PAUSED)
+        self.save_pipeline_graph(self.record_pipeline, "recording_pipeline.png")  
         self.save_buffered_video("buffered_output.mp4")
      
         try:
@@ -154,7 +156,7 @@ class SmartRecorder:
         except KeyboardInterrupt:
             pass
         
-        self.pipeline.set_state(Gst.State.NULL)
+        self.record_pipeline.set_state(Gst.State.NULL)
 
 
 def main():

@@ -4,6 +4,9 @@ videos/
 *.png
 *.dot
 *.jpg
+*.mp4
+*.avi
+*.mkv
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
