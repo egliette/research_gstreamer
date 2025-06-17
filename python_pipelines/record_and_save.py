@@ -1,7 +1,11 @@
+# Standard library
 import os
+import subprocess
+import time
+from collections import deque
+import logging
 
 os.environ["GST_DEBUG"] = "2"
-import logging
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -9,18 +13,14 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 logger = logging.getLogger(__name__)
-import subprocess
-import sys
-import time
-from collections import deque
 
 import cv2
+from dotenv import load_dotenv
 import gi
-
 gi.require_version("Gst", "1.0")
 gi.require_version("GLib", "2.0")
-from dotenv import load_dotenv
 from gi.repository import GLib, Gst
+
 
 load_dotenv(dotenv_path="../.env")
 
@@ -89,7 +89,7 @@ class SmartRecorder:
         caps = sink_pad.get_current_caps()
         save_pipeline = Gst.parse_launch(
             f'appsrc name=src format=time caps="{caps.to_string()}" ! '
-            'parsebin !'
+            'parsebin ! '
             'mp4mux  ! '
             f'filesink location={output_file} sync=false'
         )
